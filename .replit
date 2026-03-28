@@ -25,6 +25,8 @@ GOOGLE_CALLBACK_URL = "http://localhost:3000/api/auth/google/callback"
 CLIENT_URL = "http://localhost:3000"
 NODE_ENV = "development"
 MONGODB_URI = "mongodb+srv://hireswift:RJAe78At9CdPR0wY@cluster0.lrxciqu.mongodb.net/hireswift?appName=Cluster0"
+GOOGLE_CLIENT_ID = "507681225724-0857lpgjo06li7eac8bjv9fu0pq2dudm.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET = "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"
 
 [workflows]
 runButton = "Project"
