@@ -24,6 +24,7 @@ JWT_EXPIRES_IN = "7d"
 GOOGLE_CALLBACK_URL = "http://localhost:3000/api/auth/google/callback"
 CLIENT_URL = "http://localhost:3000"
 NODE_ENV = "development"
+MONGODB_URI = "mongodb+srv://hireswift:RJAe78At9CdPR0wY@cluster0.lrxciqu.mongodb.net/hireswift?appName=Cluster0"
 
 [workflows]
 runButton = "Project"
