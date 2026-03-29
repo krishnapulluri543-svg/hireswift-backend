@@ -49,7 +49,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ success: true, status: 'healthy', timestamp: new Date().toISOString() });
+  res.status(200).json({ status: 'ok' });
 });
 
 app.use('/api/auth', authRoutes);
@@ -66,10 +66,23 @@ app.use((req, res) => {
 
 app.use(errorHandler);
 
+const https = require('https');
+
+const selfPing = () => {
+  const url = process.env.APP_URL || 'https://workspace.krishnapulluri5.replit.app/health';
+  https.get(url, (res) => {
+    console.log(`[Self-ping] ${new Date().toISOString()} — status: ${res.statusCode}`);
+  }).on('error', (err) => {
+    console.warn(`[Self-ping] Failed: ${err.message}`);
+  });
+};
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`HireSwift API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  setInterval(selfPing, 3 * 60 * 1000);
+  console.log('Self-ping active — pinging /health every 3 minutes');
 });
 
 module.exports = app;
