@@ -7,7 +7,12 @@
     "start": "node index.js",
     "dev": "nodemon index.js"
   },
-  "keywords": ["hireswift", "job-application", "chrome-extension", "api"],
+  "keywords": [
+    "hireswift",
+    "job-application",
+    "chrome-extension",
+    "api"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -25,5 +30,8 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.1"
   }
 }
