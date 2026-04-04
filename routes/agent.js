@@ -1,172 +1,92 @@
-const express = require('express');
+import express from 'express';
+import { protect, authorize } from '../middleware/auth.js';
+import User from '../models/User.js';
+import Job from '../models/Job.js';
+import { sendJobAppliedEmail } from '../services/emailService.js';
+import { tailorResume } from '../services/resumeTailor.js';
+
 const router = express.Router();
-const path = require('path');
-const fs = require('fs');
-const User = require('../models/User');
-const Job = require('../models/Job');
-const { protect, authorize } = require('../middleware/auth');
 
-router.use(protect, authorize('agent', 'admin'));
-
-router.get('/queue', async (req, res, next) => {
+// Get assigned students
+router.get('/students', protect, authorize('agent', 'admin'), async (req, res) => {
   try {
-    const { status, page = 1, limit = 20 } = req.query;
-    const filter = { agent: req.user._id };
-    if (status) filter.status = status;
-
-    const skip = (page - 1) * limit;
-    const [jobs, total] = await Promise.all([
-      Job.find(filter)
-        .populate('student', 'name email profile.phone resume')
-        .sort({ priority: -1, createdAt: 1 })
-        .skip(skip)
-        .limit(Number(limit)),
-      Job.countDocuments(filter),
-    ]);
-
-    res.status(200).json({
-      success: true,
-      total,
-      page: Number(page),
-      pages: Math.ceil(total / limit),
-      data: jobs,
-    });
-  } catch (error) {
-    next(error);
+    const students = await User.find({ role: 'student', assignedAgent: req.user._id }).select('-password');
+    const studentsWithCounts = await Promise.all(students.map(async (s) => {
+      const pendingJobs = await Job.countDocuments({ email: s.email, status: 'pending' });
+      return { ...s.toObject(), pendingJobs };
+    }));
+    res.json({ success: true, students: studentsWithCounts, totalApplied: req.user.totalApplied, appliedToday: req.user.appliedToday });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 
-router.get('/students', async (req, res, next) => {
+// Get next job for a student
+router.get('/queue', protect, authorize('agent', 'admin'), async (req, res) => {
   try {
-    const students = await User.find({ role: 'student', assignedAgent: req.user._id }).select(
-      'name email profile resume createdAt'
-    );
-    res.status(200).json({ success: true, total: students.length, data: students });
-  } catch (error) {
-    next(error);
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ success: false, message: 'Email required' });
+    const job = await Job.findOne({ email, status: 'pending' }).sort({ matchScore: -1, createdAt: 1 });
+    res.json({ success: true, job: job || null });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 
-router.get('/students/:id', async (req, res, next) => {
+// Mark job as applied
+router.post('/mark-applied', protect, authorize('agent', 'admin'), async (req, res) => {
   try {
-    const student = await User.findOne({ _id: req.params.id, role: 'student', assignedAgent: req.user._id }).select(
-      '-password'
-    );
-
-    if (!student) {
-      return res.status(404).json({ success: false, message: 'Student not found or not assigned to you' });
-    }
-
-    res.status(200).json({ success: true, data: student });
-  } catch (error) {
-    next(error);
+    const { job_id, email } = req.query;
+    if (!job_id || !email) return res.status(400).json({ success: false, message: 'job_id and email required' });
+    const job = await Job.findByIdAndUpdate(job_id, { status: 'applied', appliedAt: new Date(), appliedBy: req.user.email }, { new: true });
+    if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+    // Update agent stats
+    await User.findByIdAndUpdate(req.user._id, { $inc: { totalApplied: 1, appliedToday: 1 } });
+    // Send email notification
+    const student = await User.findOne({ email });
+    if (student) sendJobAppliedEmail(email, student.name, job.jobTitle, job.company, job.jobLink).catch(() => {});
+    res.json({ success: true, message: 'Job marked as applied', job });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 
-router.get('/students/:id/resume', async (req, res, next) => {
+// Get student info
+router.get('/student-info', protect, authorize('agent', 'admin'), async (req, res) => {
   try {
-    const student = await User.findOne({ _id: req.params.id, assignedAgent: req.user._id });
-
-    if (!student) {
-      return res.status(404).json({ success: false, message: 'Student not found or not assigned to you' });
-    }
-
-    if (!student.resume || !student.resume.path) {
-      return res.status(404).json({ success: false, message: 'Student has no resume uploaded' });
-    }
-
-    if (!fs.existsSync(student.resume.path)) {
-      return res.status(404).json({ success: false, message: 'Resume file not found on server' });
-    }
-
-    res.download(student.resume.path, student.resume.originalName);
-  } catch (error) {
-    next(error);
+    const { email } = req.query;
+    const student = await User.findOne({ email }).select('-password');
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    res.json({ success: true, studentInfo: student });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 
-router.get('/students/:id/jobs', async (req, res, next) => {
+// Get resume for a student
+router.get('/resume', protect, authorize('agent', 'admin'), async (req, res) => {
   try {
-    const { status } = req.query;
-    const filter = { student: req.params.id, agent: req.user._id };
-    if (status) filter.status = status;
-
-    const jobs = await Job.find(filter).sort({ createdAt: -1 });
-    res.status(200).json({ success: true, total: jobs.length, data: jobs });
-  } catch (error) {
-    next(error);
+    const { email } = req.query;
+    const student = await User.findOne({ email });
+    if (!student || !student.resumeUrl) return res.status(404).json({ success: false, message: 'No resume found' });
+    res.json({ success: true, resumeUrl: student.resumeUrl });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 
-router.put('/jobs/:id/status', async (req, res, next) => {
+// Get AI tailored resume for a job
+router.post('/tailor-resume', protect, authorize('agent', 'admin'), async (req, res) => {
   try {
-    const { status, notes } = req.body;
-    const validStatuses = ['pending', 'applied', 'rejected', 'interview', 'offer', 'withdrawn'];
-
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ success: false, message: 'Invalid status' });
-    }
-
-    const update = { status, notes };
-    if (status === 'applied') update.appliedAt = new Date();
-    if (status === 'rejected') update.rejectedAt = new Date();
-
-    const job = await Job.findOneAndUpdate({ _id: req.params.id, agent: req.user._id }, update, { new: true }).populate(
-      'student',
-      'name email'
-    );
-
-    if (!job) {
-      return res.status(404).json({ success: false, message: 'Job not found in your queue' });
-    }
-
-    res.status(200).json({ success: true, data: job });
-  } catch (error) {
-    next(error);
+    const { jobId, email } = req.body;
+    const [job, student] = await Promise.all([Job.findById(jobId), User.findOne({ email })]);
+    if (!job || !student) return res.status(404).json({ success: false, message: 'Job or student not found' });
+    const result = await tailorResume(student, job.jobDescription, job.jobTitle);
+    if (result.success) await Job.findByIdAndUpdate(jobId, { tailoredResume: result.tailoredResume });
+    res.json({ success: true, tailoredResume: result.tailoredResume });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 
-router.post('/jobs/:id/assign', async (req, res, next) => {
-  try {
-    const job = await Job.findByIdAndUpdate(
-      req.params.id,
-      { agent: req.user._id },
-      { new: true }
-    ).populate('student', 'name email');
-
-    if (!job) {
-      return res.status(404).json({ success: false, message: 'Job not found' });
-    }
-
-    res.status(200).json({ success: true, message: 'Job assigned to you', data: job });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get('/stats', async (req, res, next) => {
-  try {
-    const [jobStats, studentCount] = await Promise.all([
-      Job.aggregate([
-        { $match: { agent: req.user._id } },
-        { $group: { _id: '$status', count: { $sum: 1 } } },
-      ]),
-      User.countDocuments({ role: 'student', assignedAgent: req.user._id }),
-    ]);
-
-    const summary = { total: 0, pending: 0, applied: 0, rejected: 0, interview: 0, offer: 0 };
-    jobStats.forEach(({ _id, count }) => {
-      summary[_id] = count;
-      summary.total += count;
-    });
-
-    res.status(200).json({
-      success: true,
-      data: { jobs: summary, assignedStudents: studentCount },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-module.exports = router;
+export default router;
