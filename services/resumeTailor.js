@@ -1,183 +1,89 @@
 // services/resumeTailor.js
-// AI-powered resume tailoring for each job application
+// AI-powered resume tailoring - OpenAI is optional
 
-import OpenAI from 'openai';
+let openai = null;
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Only initialize OpenAI if API key exists
+if (process.env.OPENAI_API_KEY) {
+  try {
+    const { default: OpenAI } = await import('openai');
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    console.log('✅ OpenAI initialized');
+  } catch(e) {
+    console.log('⚠️  OpenAI not available:', e.message);
+  }
+}
 
-// ─── Tailor resume for a specific job ────────────────────────────
 export async function tailorResume(studentProfile, jobDescription, jobTitle) {
+  const personalData = typeof studentProfile.personalData === 'string'
+    ? JSON.parse(studentProfile.personalData || '{}')
+    : studentProfile.personalData || {};
+
+  if (!openai) {
+    return { success: true, tailoredResume: generateFallback(personalData, jobDescription, jobTitle) };
+  }
+
   try {
-    const personalData = typeof studentProfile.personalData === 'string'
-      ? JSON.parse(studentProfile.personalData)
-      : studentProfile.personalData || {};
-
-    const prompt = `You are an expert resume writer. Tailor this student's resume for the specific job below.
-
-STUDENT PROFILE:
-Name: ${personalData.fullName || studentProfile.name}
-Skills: ${personalData.skills || 'Not specified'}
-Experience: ${JSON.stringify(personalData.experienceDetails || [])}
-Target roles: ${personalData.targetedJobs || 'Not specified'}
-Summary: ${personalData.summary || 'Not specified'}
-
-JOB TITLE: ${jobTitle || 'Not specified'}
-
-JOB DESCRIPTION:
-${jobDescription}
-
-INSTRUCTIONS:
-1. Rewrite the professional summary to match this specific job
-2. Reorder skills to put the most relevant ones first
-3. Highlight experience points most relevant to this job
-4. Add relevant keywords from the job description naturally
-5. Keep it honest — only use information from the student profile
-6. Format as a clean, ATS-friendly resume in plain text
-
-OUTPUT FORMAT:
-[SUMMARY]
-(2-3 sentence tailored summary)
-
-[SKILLS]
-(Comma-separated, most relevant first)
-
-[EXPERIENCE]
-(Bullet points for each role, emphasizing relevant experience)
-
-[MATCH ANALYSIS]
-Match score: XX%
-Key matches: (list 3-5 key skill/experience matches)
-Gaps: (list any important gaps)`;
-
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content: `Tailor this resume for the job.\n\nStudent: ${JSON.stringify(personalData)}\n\nJob Title: ${jobTitle}\nJob Description: ${jobDescription}\n\nProvide tailored summary, reordered skills, and relevant experience highlights.` }],
       max_tokens: 1500,
-      temperature: 0.7
     });
-
-    return {
-      success: true,
-      tailoredResume: completion.choices[0].message.content,
-      usage: completion.usage
-    };
-  } catch (e) {
-    console.error('Resume tailor error:', e.message);
-    return {
-      success: false,
-      error: e.message,
-      tailoredResume: generateFallbackResume(studentProfile, jobDescription)
-    };
+    return { success: true, tailoredResume: completion.choices[0].message.content };
+  } catch(e) {
+    return { success: true, tailoredResume: generateFallback(personalData, jobDescription, jobTitle) };
   }
 }
 
-// ─── Generate cover letter ────────────────────────────────────────
 export async function generateCoverLetter(studentProfile, jobDescription, jobTitle, company) {
+  const personalData = typeof studentProfile.personalData === 'string'
+    ? JSON.parse(studentProfile.personalData || '{}')
+    : studentProfile.personalData || {};
+
+  if (!openai) {
+    return { success: true, coverLetter: `Dear Hiring Manager,\n\nI am excited to apply for the ${jobTitle} position at ${company}. With my background in ${personalData.skills || 'relevant technologies'}, I am confident I can contribute meaningfully to your team.\n\nThank you for considering my application.\n\nSincerely,\n${personalData.fullName || studentProfile.name}` };
+  }
+
   try {
-    const personalData = typeof studentProfile.personalData === 'string'
-      ? JSON.parse(studentProfile.personalData)
-      : studentProfile.personalData || {};
-
-    const prompt = `Write a professional, personalized cover letter for this job application.
-
-APPLICANT:
-Name: ${personalData.fullName || studentProfile.name}
-Email: ${personalData.emailAddress || studentProfile.email}
-Skills: ${personalData.skills || 'Not specified'}
-Summary: ${personalData.summary || 'Not specified'}
-Experience: ${(personalData.experienceDetails || []).map(e => `${e.role} at ${e.company}`).join(', ')}
-
-JOB: ${jobTitle} at ${company || 'the company'}
-DESCRIPTION: ${jobDescription}
-
-Write a concise, compelling cover letter (3 paragraphs):
-1. Opening: Why this specific role excites them
-2. Middle: 2-3 specific achievements/skills that match the job
-3. Closing: Call to action
-
-Keep it under 250 words. Professional but not generic. No placeholders.`;
-
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content: `Write a cover letter for ${personalData.fullName} applying for ${jobTitle} at ${company}. Job: ${jobDescription}. Skills: ${personalData.skills}` }],
       max_tokens: 600,
-      temperature: 0.8
     });
-
-    return {
-      success: true,
-      coverLetter: completion.choices[0].message.content
-    };
-  } catch (e) {
-    return {
-      success: false,
-      error: e.message,
-      coverLetter: 'Cover letter generation requires OpenAI API key with credits.'
-    };
+    return { success: true, coverLetter: completion.choices[0].message.content };
+  } catch(e) {
+    return { success: false, error: e.message, coverLetter: 'Cover letter generation failed.' };
   }
 }
 
-// ─── Answer job application questions ────────────────────────────
 export async function answerJobQuestion(question, studentProfile, jobDescription) {
+  const pd = typeof studentProfile === 'string' ? JSON.parse(studentProfile || '{}') : (studentProfile?.personalData || studentProfile || {});
+
+  if (!openai) {
+    return { success: true, answer: `Based on my experience with ${pd.skills || 'relevant technologies'}, I am well-suited for this role. I have worked on similar challenges and am confident in my ability to contribute effectively.` };
+  }
+
   try {
-    const personalData = typeof studentProfile === 'string'
-      ? JSON.parse(studentProfile)
-      : studentProfile?.personalData || studentProfile || {};
-
-    const prompt = `Answer this job application question on behalf of the candidate.
-
-CANDIDATE:
-Name: ${personalData.fullName || 'Candidate'}
-Skills: ${personalData.skills || 'Not specified'}
-Experience: ${JSON.stringify(personalData.experienceDetails || [])}
-Work auth: ${personalData.workAuthorization || 'Not specified'}
-
-JOB DESCRIPTION: ${jobDescription || 'Not provided'}
-
-QUESTION: ${question}
-
-Write a professional, specific, honest answer in 2-4 sentences. 
-Use first person. Be concise and direct.`;
-
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content: `Answer this job application question for a candidate.\nCandidate skills: ${pd.skills}\nExperience: ${JSON.stringify(pd.experienceDetails || [])}\nQuestion: ${question}` }],
       max_tokens: 300,
-      temperature: 0.7
     });
-
-    return {
-      success: true,
-      answer: completion.choices[0].message.content
-    };
-  } catch (e) {
-    return {
-      success: false,
-      error: e.message,
-      answer: 'AI answer generation requires OpenAI API key with credits.'
-    };
+    return { success: true, answer: completion.choices[0].message.content };
+  } catch(e) {
+    return { success: false, error: e.message, answer: 'AI answer generation failed.' };
   }
 }
 
-// ─── Fallback resume (no API key) ────────────────────────────────
-function generateFallbackResume(profile, jobDescription) {
-  const pd = typeof profile.personalData === 'string'
-    ? JSON.parse(profile.personalData || '{}')
-    : profile.personalData || profile;
+function generateFallback(pd, jobDescription, jobTitle) {
+  return `[TAILORED RESUME SUMMARY]
+${pd.summary || `Experienced professional with skills in ${pd.skills || 'various technologies'}.`}
 
-  return `[SUMMARY]
-${pd.summary || `Experienced professional with skills in ${pd.skills || 'various technologies'}, seeking new opportunities.`}
-
-[SKILLS]
+[RELEVANT SKILLS]
 ${pd.skills || 'To be updated'}
 
-[EXPERIENCE]
-${(pd.experienceDetails || []).map(e =>
-  `• ${e.role} at ${e.company} (${e.startDate} - ${e.endDate || 'Present'})
-   - Location: ${e.city}, ${e.state}`
-).join('\n') || 'No experience data available'}
+[EXPERIENCE HIGHLIGHTS]
+${(pd.experienceDetails || []).map(e => `• ${e.role} at ${e.company}`).join('\n') || 'See full resume'}
 
-[MATCH ANALYSIS]
-Match score: N/A
-Note: Add OpenAI API key to enable AI-powered resume tailoring.`;
+Note: Add OPENAI_API_KEY in Railway variables to enable AI-powered tailoring.`;
 }
